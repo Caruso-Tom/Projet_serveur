@@ -3,7 +3,7 @@ from pycuda.compiler import SourceModule
 import numpy as np
 
 cuda.init()
-dev = cuda.Device(0)
+dev = cuda.Device(3)
 contx = dev.make_context()
 
 size_x = 64
@@ -25,7 +25,7 @@ cuda.memcpy_htod(b_gpu, b)
 mod = SourceModule("""
     __global__ void add(float *a,float *b,float *c)
     { int idx = threadIdx.x +blockIdx.x*blockDim.x+ (threadIdx.y+blockDim.y * blockIdx.y) * blockDim.x *gridDim.x;
-        c[idx] = a[idx] + b[idx];
+        c[idx] = threadIdx.y*a[idx] + b[idx];
     }
 """)
 
@@ -34,5 +34,4 @@ func(a_gpu, b_gpu, c_gpu, block=(32, 32, 1), grid=(2, 1))
 cuda.memcpy_dtoh(c, c_gpu)
 print("\n", c[:, 1])
 print("\n", c[1, :])
-
-del contx
+contx.pop()
