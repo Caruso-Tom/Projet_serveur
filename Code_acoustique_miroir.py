@@ -71,9 +71,24 @@ j_source = np.int32(int((z_source - z_min) / dz))
 # Creating dataset
 X, Z = np.meshgrid(np.linspace(x_min, x_max, Nx), np.linspace(z_min, z_max, Nz))
 
+Coor_surface = [[x_min+i*dx, np.exp(((x_min+i*dx)**2)/2)]for i in [0, Nx]]
+Coor_fantome = [[i, int((np.exp(((x_min+i*dx)**2)/2)-z_min)/dz)+1] for i in [0, Nx]]
+Coor_miroir = np.zeros(Nx+1, 2)
+
+
 mod = SourceModule("""
     #include <math.h>
-
+    
+    __device__ void Calcul_point_orthogonal(float *coor_miroir, int *coor_fantome, float *coor_surface)
+    {
+    int idx = 2*((threadIdx.x+1) +(blockIdx.x*blockDim.x)+ (threadIdx.y + 1 + blockDim.y * blockIdx.y) * (blockDim.x *gridDim.x+2));
+    coor_miroir[idx]
+    }
+    __device__ void Calcul_point_miroir(float *coor_miroir, int *coor_fantome, float *coor_surface)
+    {
+    int idx = 2*((threadIdx.x+1) +(blockIdx.x*blockDim.x)+ (threadIdx.y + 1 + blockDim.y * blockIdx.y) * (blockDim.x *gridDim.x+2));
+    coor_miroir[idx]
+    }
     __device__ float Df(float xn1,float xn, float dx)
     {
     return((xn1-xn)/dx);
