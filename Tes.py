@@ -1,8 +1,8 @@
 import pycuda.driver as cuda
 from pycuda.compiler import SourceModule
 import numpy as np
-
 cuda.init()
+# On choisit le GPU sur lequel le code va tourner, entre 0 et 3
 dev = cuda.Device(3)
 contx = dev.make_context()
 

@@ -11,13 +11,13 @@ contx = dev.make_context()
 
 # Définition du domaine d'étude
 
-x_min = -10000
-x_max = 10000
-z_min = -10000
-z_max = 10000
-Tf = 2
-Nz = 300
-Nx = 200
+x_min = -1
+x_max = 1
+z_min = -1
+z_max = 1
+Tf = 1
+Nz = 100
+Nx = 100
 
 # Teste si Nz et Nx sont sous la bonne forme
 if (Nx - 2) % 32 != 0:
@@ -26,22 +26,30 @@ if (Nz - 2) % 32 != 0:
     Nz += 32 - (Nz - 2) % 32
 
 # Définition  de l'état initial en cuda
-P = np.zeros((Nz, Nx))  # Vitesse selon x
-P = P.astype(np.float32)
-P_gpu = cuda.mem_alloc(P.nbytes)
-cuda.memcpy_htod(P_gpu, P)
+Pn = np.zeros((Nz, Nx))  # Vitesse selon x
+Pn = Pn.astype(np.float32)
+Pn_gpu = cuda.mem_alloc(Pn.nbytes)
+cuda.memcpy_htod(Pn_gpu, Pn)
+
+Pn1 = np.zeros((Nz, Nx))  # Vitesse selon x
+Pn1 = Pn1.astype(np.float32)
+Pn1_gpu = cuda.mem_alloc(Pn1.nbytes)
+cuda.memcpy_htod(Pn1_gpu, Pn1)
+
+Pn1_gpu_cpy = cuda.mem_alloc(Pn1.nbytes)
+cuda.memcpy_htod(Pn1_gpu_cpy, Pn1)
 
 # Définition des propriété du sol
 
-v=1000
-rho = 10000  # Densité
+v = 2
+rho = 1000  # Densité
 
 Rho = rho * np.ones((Nz, Nx))  # Coefficient Mu (i,i+1/2,j,j+1/2)
 Rho = Rho.astype(np.float32)
 Rho_gpu = cuda.mem_alloc(Rho.nbytes)
 cuda.memcpy_htod(Rho_gpu, Rho)
 
-V = V * np.ones((Nz, Nx))  # Coefficient Mu (i,i+1/2,j,j+1/2)
+V = v * np.ones((Nz, Nx))  # Coefficient Mu (i,i+1/2,j,j+1/2)
 V = V.astype(np.float32)
 V_gpu = cuda.mem_alloc(V.nbytes)
 cuda.memcpy_htod(V_gpu, V)
@@ -50,11 +58,12 @@ cuda.memcpy_htod(V_gpu, V)
 
 dz = np.float32((z_max - z_min) / (Nz - 1))
 dx = np.float32((x_max - x_min) / (Nx - 1))
-dt = np.float32(0.5 * dx / (np.sqrt(2) * Vp))
+dt = np.float32(0.9 * min(dx, dz)/(np.sqrt(2)*v))
+print(dt)
 Nt = int(Tf / dt) + 1
 
 # Coordonnées de la source et position approximative sur le maillage
-x_source = 5000
+x_source = 0
 z_source = 0
 i_source = np.int32(int((x_source - x_min) / dx))
 j_source = np.int32(int((z_source - z_min) / dz))
@@ -71,23 +80,28 @@ mod = SourceModule("""
     }
     __device__ float Source(float t,float dt)
     {
-    float alpha =40.0;
+    float alpha =400.0;
     float t0 = 5.0*t;
-    float result=-2* alpha * (t - t0) * exp(-alpha * (t - t0) * (t-t0));
+    float result=exp(-alpha * (t - t0) * (t-t0));
     return (result);
     }
-    __global__ void iteration_temps(float *p, float *rho, float *v, int i_source, int j_source ,float dt ,float dx, 
+    __global__ void iteration_temps(float *pn, float *pn1,float *pn1_cpy, float *rho, float *v, int i_source, int j_source ,float dt ,float dx, 
     float dz, float t)
     { 
     int idx = (threadIdx.x+1) +(blockIdx.x*blockDim.x)+ (threadIdx.y + 1 + blockDim.y * blockIdx.y) * (blockDim.x *gridDim.x+2);
-    sigma_xx[idx] += (l[idx]+2*m[2*idx+1])*dt*Df(u[idx+1],u[idx],dx)+l[idx]*dt*Df(v[idx+(blockDim.x*gridDim.x+2)],v[idx],dz);
-    sigma_zz[idx] += (l[idx]+2*m[2*idx+1])*dt*Df(v[idx+(blockDim.x*gridDim.x+2)],v[idx],dz)+l[idx]*dt*Df(u[idx+1],u[idx],dx);
-    sigma_xz[idx] += (m[2*idx+1])*dt*(Df(v[idx+1],v[idx],dx)+Df(u[idx+(blockDim.x*gridDim.x+2)],u[idx],dz));
+    int source = i_source+ j_source*(blockDim.x*gridDim.x+2);
+    pn1[idx]=2*pn1_cpy[idx]-pn[idx] + v[idx]*v[idx]*dt*dt*rho[idx]*(Df(Df(pn1_cpy[idx+1],pn1_cpy[idx],dx)/rho[idx+1],
+    Df(pn1_cpy[idx],pn1_cpy[idx-1],dx)/rho[idx],dx) + Df(Df(pn1_cpy[idx+(blockDim.x *gridDim.x+2)],pn1_cpy[idx],dz)
+    /rho[idx+(blockDim.x *gridDim.x+2)],Df(pn1_cpy[idx],pn1_cpy[idx-(blockDim.x *gridDim.x+2)],dz)/rho[idx],dz));
     if (idx == source){
         float excitation = Source(t,dt);
-        sigma_xx[idx] += dt * excitation;
-        sigma_zz[idx] += dt * excitation;
+        pn1[idx] += dt*dt * excitation;
     }
+    }
+    __global__ void Copy(float *p,float *p_cpy)
+    { 
+    int idx = (threadIdx.x+1) +(blockIdx.x*blockDim.x)+ (threadIdx.y + 1 + blockDim.y * blockIdx.y) * (blockDim.x *gridDim.x+2);
+    p_cpy[idx]=p[idx];
     }
 """)
 
@@ -96,8 +110,8 @@ nt = 0
 t = np.float32(0)
 
 # Importation des fonctions cuda
-stress_to_velocity = mod.get_function("stress_to_velocity")
-velocity_to_stress = mod.get_function("velocity_to_stress")
+iteration_temps = mod.get_function("iteration_temps")
+Copy = mod.get_function("Copy")
 longueur_grille_x = (Nx - 2) // 32
 longueur_grille_z = (Nz - 2) // 32
 
@@ -107,25 +121,26 @@ while nt < Nt:
     nt += 1
     t += dt
     # Calcul sur GPU
-    velocity_to_stress(U_gpu, V_gpu, L_gpu, M_gpu, i_source, j_source, Sigma_xx_gpu, Sigma_zz_gpu, Sigma_xz_gpu, dt, dx,
-                       dz, t, block=(32, 32, 1), grid=(longueur_grille_x, longueur_grille_z))
-    stress_to_velocity(U_gpu, V_gpu, B_gpu, Sigma_xx_gpu, Sigma_zz_gpu, Sigma_xz_gpu, dt, dx, dz, block=(32, 32, 1),
-                       grid=(longueur_grille_x, longueur_grille_z))
+    iteration_temps(Pn_gpu, Pn1_gpu, Pn1_gpu_cpy, Rho_gpu, V_gpu, i_source, j_source, dt, dx,dz ,t , block=(32, 32, 1),
+                    grid=(longueur_grille_x, longueur_grille_z))
+    Copy(Pn1_gpu_cpy, Pn_gpu, block=(32, 32, 1), grid=(longueur_grille_x, longueur_grille_z))
+    Copy(Pn1_gpu, Pn1_gpu_cpy, block=(32, 32, 1), grid=(longueur_grille_x, longueur_grille_z))
 
     # Affichage en python
     if nt % 10 == 0:
         # On importe les résultats Cuda en python
-        cuda.memcpy_dtoh(P, P_gpu)
-
+        cuda.memcpy_dtoh(Pn1, Pn1_gpu)
 
         # Affichage U
-        Pmin = np.min(P)
-        Pmax = np.max(P)
+        pp.figure(figsize=(8, 6))
+        Pmin = np.min(Pn1)
+        Pmax = np.max(Pn1)
         mylevelsU = np.linspace(Pmin, Pmax, 30)
-        fig= pp.contourf(X, Z, P, levels=mylevelsU, cmap="coolwarm")
-        fig.set_title("U")
-        fig.set_xlabel("x")
-        fig.set_ylabel("z")
+        pp.contourf(X, Z, Pn1, levels=mylevelsU, cmap="coolwarm")
+        pp.xlabel("X")
+        pp.ylabel("Z")
+        pp.title("PRESSION")
+        pp.show()
 contx.pop()
 print(1)
 
