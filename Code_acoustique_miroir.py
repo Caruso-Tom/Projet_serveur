@@ -107,7 +107,7 @@ mod = SourceModule("""
 
 # Définition des paramétres d'itération en temps
 nt = 0
-t = np.float32(0)
+t = np.float32(0
 
 # Importation des fonctions cuda
 iteration_temps = mod.get_function("iteration_temps")
