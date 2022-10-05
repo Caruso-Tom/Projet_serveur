@@ -8,6 +8,80 @@ cuda.init()
 dev = cuda.Device(3)
 contx = dev.make_context()
 
+# Code en CUDA utiliser pour le kernel
+
+mod = SourceModule("""
+    #include <math.h>
+
+    __global__ void Calcul_point_miroir(float *coor_miroir, int *coor_fantome, float *coor_surface, int length )
+    {
+        int idx = 2*((threadIdx.x) +(blockIdx.x*blockDim.x)+ (threadIdx.y + blockDim.y * blockIdx.y) * (blockDim.x *gridDim.x+2));
+        int i=-10;
+        float min= pow(pow(coor_fantome[idx]-coor_surface[idx-20],2)+pow(coor_fantome[idx+1]-coor_surface[idx+1-20],2),0.5);
+        int i_min=-10;
+        for (i=-10;i<10;i++) 
+            {
+            if (pow(pow(coor_fantome[idx]-coor_surface[idx+2*i],2)+pow(coor_fantome[idx+1]-coor_surface[idx+1+2*i],2),0.5)<min)
+                {
+                    min=pow(pow(coor_fantome[idx]-coor_surface[idx+2*i],2)+pow(coor_fantome[idx+1]-coor_surface[idx+1+2*i],2),0.5);
+                    i_min=i;
+                }
+            }
+        coor_miroir[idx]=2*coor_surface[idx+2*i_min]-coor_fantome[idx];
+        coor_miroir[idx+1]=2*coor_surface[idx+1+2*i_min]-coor_fantome[idx+1];
+    }
+    __device__ void Calcul_point_miroir(float *coor_miroir, int *coor_fantome, float *coor_surface)
+    {
+        int idx = 2*((threadIdx.x+1) +(blockIdx.x*blockDim.x)+ (threadIdx.y + 1 + blockDim.y * blockIdx.y) * (blockDim.x *gridDim.x+2));
+        coor_miroir[idx]
+    }
+    __device__ float Df(float xn1,float xn, float dx)
+    {
+        return((xn1-xn)/dx);
+    }
+    __device__ float Source(float t,float dt)
+    {
+        float alpha =400.0;
+        float t0 = 5.0*t;
+        float result=exp(-alpha * (t - t0) * (t-t0));
+        return (result);
+    }
+    __global__ void iteration_temps(float *pn, float *pn1,float *pn1_cpy, float *rho, float *v, int i_source, int j_source ,float dt ,float dx, 
+    float dz, float t)
+    { 
+        int idx = (threadIdx.x+1) +(blockIdx.x*blockDim.x)+ (threadIdx.y + 1 + blockDim.y * blockIdx.y) * (blockDim.x *gridDim.x+2);
+        int source = i_source+ j_source*(blockDim.x*gridDim.x+2);
+        pn1[idx]=2*pn1_cpy[idx]-pn[idx] + v[idx]*v[idx]*dt*dt*rho[idx]*(Df(Df(pn1_cpy[idx+1],pn1_cpy[idx],dx)/rho[idx+1],
+        Df(pn1_cpy[idx],pn1_cpy[idx-1],dx)/rho[idx],dx) + Df(Df(pn1_cpy[idx+(blockDim.x *gridDim.x+2)],pn1_cpy[idx],dz)
+        /rho[idx+(blockDim.x *gridDim.x+2)],Df(pn1_cpy[idx],pn1_cpy[idx-(blockDim.x *gridDim.x+2)],dz)/rho[idx],dz));
+        if (idx == source)
+        {
+           float excitation = Source(t,dt);
+            pn1[idx] += dt*dt * excitation;
+        }
+    }
+    __global__ void Copy(float *p,float *p_cpy)
+    { 
+        int idx = (threadIdx.x+1) +(blockIdx.x*blockDim.x)+ (threadIdx.y + 1 + blockDim.y * blockIdx.y) * (blockDim.x *gridDim.x+2);
+        p_cpy[idx]=p[idx];
+    }
+    __global__ void lissage_courbe(float *courbe, float fg,dxc)
+    {
+        int idx=(threadIdx.x+1) +(blockIdx.x*blockDim.x)+ (threadIdx.y+1 + blockDim.y * blockIdx.y) * (blockDim.x *gridDim.x+2);
+        float nouveau_point = 0;
+        float cutoff= fg/2;
+	    for(int j =0; j<blockDim.x *gridDim.x+2;j++)
+	    {
+	        nouveau_point+= dxc*courbe[j]*cutoff*sinc(cutoff * dxc*(idx-j));
+	    }
+	courbe[idx]=nouveau_point;
+    }
+    
+    __global__ void iteration_miroir_velocity (float *coor_miroir, float *p, float *coor_miroir,  )
+    {
+        
+    }
+""")
 
 # Définition du domaine d'étude
 
@@ -19,7 +93,7 @@ Tf = 1
 Nz = 100
 Nx = 100
 
-# Teste si Nz et Nx sont sous la bonne forme
+# Mise en forme des pas de discrétisations
 if (Nx - 2) % 32 != 0:
     Nx += 32 - (Nx - 2) % 32
 if (Nz - 2) % 32 != 0:
@@ -58,7 +132,7 @@ cuda.memcpy_htod(V_gpu, V)
 
 dz = np.float32((z_max - z_min) / (Nz - 1))
 dx = np.float32((x_max - x_min) / (Nx - 1))
-dt = np.float32(0.9 * min(dx, dz)/(np.sqrt(2)*v))
+dt = np.float32(0.9 * min(dx, dz) / (np.sqrt(2) * v))
 print(dt)
 Nt = int(Tf / dt) + 1
 
@@ -71,54 +145,9 @@ j_source = np.int32(int((z_source - z_min) / dz))
 # Creating dataset
 X, Z = np.meshgrid(np.linspace(x_min, x_max, Nx), np.linspace(z_min, z_max, Nz))
 
-Coor_surface = [[x_min+i*dx, np.exp(((x_min+i*dx)**2)/2)]for i in [0, Nx]]
-Coor_fantome = [[i, int((np.exp(((x_min+i*dx)**2)/2)-z_min)/dz)+1] for i in [0, Nx]]
-Coor_miroir = np.zeros(Nx+1, 2)
-
-
-mod = SourceModule("""
-    #include <math.h>
-    
-    __device__ void Calcul_point_orthogonal(float *coor_miroir, int *coor_fantome, float *coor_surface)
-    {
-    int idx = 2*((threadIdx.x+1) +(blockIdx.x*blockDim.x)+ (threadIdx.y + 1 + blockDim.y * blockIdx.y) * (blockDim.x *gridDim.x+2));
-    coor_miroir[idx]
-    }
-    __device__ void Calcul_point_miroir(float *coor_miroir, int *coor_fantome, float *coor_surface)
-    {
-    int idx = 2*((threadIdx.x+1) +(blockIdx.x*blockDim.x)+ (threadIdx.y + 1 + blockDim.y * blockIdx.y) * (blockDim.x *gridDim.x+2));
-    coor_miroir[idx]
-    }
-    __device__ float Df(float xn1,float xn, float dx)
-    {
-    return((xn1-xn)/dx);
-    }
-    __device__ float Source(float t,float dt)
-    {
-    float alpha =400.0;
-    float t0 = 5.0*t;
-    float result=exp(-alpha * (t - t0) * (t-t0));
-    return (result);
-    }
-    __global__ void iteration_temps(float *pn, float *pn1,float *pn1_cpy, float *rho, float *v, int i_source, int j_source ,float dt ,float dx, 
-    float dz, float t)
-    { 
-    int idx = (threadIdx.x+1) +(blockIdx.x*blockDim.x)+ (threadIdx.y + 1 + blockDim.y * blockIdx.y) * (blockDim.x *gridDim.x+2);
-    int source = i_source+ j_source*(blockDim.x*gridDim.x+2);
-    pn1[idx]=2*pn1_cpy[idx]-pn[idx] + v[idx]*v[idx]*dt*dt*rho[idx]*(Df(Df(pn1_cpy[idx+1],pn1_cpy[idx],dx)/rho[idx+1],
-    Df(pn1_cpy[idx],pn1_cpy[idx-1],dx)/rho[idx],dx) + Df(Df(pn1_cpy[idx+(blockDim.x *gridDim.x+2)],pn1_cpy[idx],dz)
-    /rho[idx+(blockDim.x *gridDim.x+2)],Df(pn1_cpy[idx],pn1_cpy[idx-(blockDim.x *gridDim.x+2)],dz)/rho[idx],dz));
-    if (idx == source){
-        float excitation = Source(t,dt);
-        pn1[idx] += dt*dt * excitation;
-    }
-    }
-    __global__ void Copy(float *p,float *p_cpy)
-    { 
-    int idx = (threadIdx.x+1) +(blockIdx.x*blockDim.x)+ (threadIdx.y + 1 + blockDim.y * blockIdx.y) * (blockDim.x *gridDim.x+2);
-    p_cpy[idx]=p[idx];
-    }
-""")
+Coor_surface = [[x_min + i * dx, np.exp(((x_min + i * dx) ** 2) / 2)] for i in [0, 10 * (Nx - 1) + 1]]
+Coor_fantome = [[x_min + i * dx, int((np.exp(((x_min + i * dx) ** 2) / 2) - z_min) / dz) * dz + dz] for i in [0, Nx]]
+Coor_miroir = np.zeros(Nx + 1, 2)
 
 # Définition des paramétres d'itération en temps
 nt = 0
@@ -136,7 +165,7 @@ while nt < Nt:
     nt += 1
     t += dt
     # Calcul sur GPU
-    iteration_temps(Pn_gpu, Pn1_gpu, Pn1_gpu_cpy, Rho_gpu, V_gpu, i_source, j_source, dt, dx,dz ,t , block=(32, 32, 1),
+    iteration_temps(Pn_gpu, Pn1_gpu, Pn1_gpu_cpy, Rho_gpu, V_gpu, i_source, j_source, dt, dx, dz, t, block=(32, 32, 1),
                     grid=(longueur_grille_x, longueur_grille_z))
     Copy(Pn1_gpu_cpy, Pn_gpu, block=(32, 32, 1), grid=(longueur_grille_x, longueur_grille_z))
     Copy(Pn1_gpu, Pn1_gpu_cpy, block=(32, 32, 1), grid=(longueur_grille_x, longueur_grille_z))
@@ -158,4 +187,3 @@ while nt < Nt:
         pp.show()
 contx.pop()
 print(1)
-
