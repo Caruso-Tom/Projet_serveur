@@ -51,9 +51,11 @@ mod = SourceModule("""
     { 
         int idx = (threadIdx.x+1) +(blockIdx.x*blockDim.x)+ (threadIdx.y + 1 + blockDim.y * blockIdx.y) * (blockDim.x *gridDim.x+2);
         int source = i_source+ j_source*(blockDim.x*gridDim.x+2);
+        
         pn1[idx]=2*pn1_cpy[idx]-pn[idx] + v[idx]*v[idx]*dt*dt*rho[idx]*(Df(Df(pn1_cpy[idx+1],pn1_cpy[idx],dx)/rho[idx+1],
         Df(pn1_cpy[idx],pn1_cpy[idx-1],dx)/rho[idx],dx) + Df(Df(pn1_cpy[idx+(blockDim.x *gridDim.x+2)],pn1_cpy[idx],dz)
         /rho[idx+(blockDim.x *gridDim.x+2)],Df(pn1_cpy[idx],pn1_cpy[idx-(blockDim.x *gridDim.x+2)],dz)/rho[idx],dz));
+        
         if (idx == source)
         {
            float excitation = Source(t,dt);
@@ -77,9 +79,32 @@ mod = SourceModule("""
 	courbe[idx]=nouveau_point;
     }
     
-    __global__ void iteration_miroir_velocity (float *coor_miroir, float *p, float *coor_miroir,  )
+    __global__ void iteration_miroir_velocity (float *coor_miroir, float *p, float *coor_fantome)
     {
-        
+    //Mise à 0 au dela des points fantomes
+    int idx=(threadIdx.x+1) +(blockIdx.x*blockDim.x)+ (threadIdx.y+1 + blockDim.y * blockIdx.y) * (blockDim.x *gridDim.x+2);
+    int flag=0;
+    int j=0;
+    while(flag=0)
+        {
+        flag=1;
+        if(j=<coor_fantome[idx])
+            {
+                p[idx+j*(blockDim.x *gridDim.x+2)]=0;
+                j++;
+                flag==0;
+            }
+        }
+    //Evaluation des points miroirs
+    float pvalue=0;
+    for(i=1,i<blockDim.x *gridDim.x+1,i++)
+        {
+        for (j=1,j<blockDim.y *gridDim.y+1,j++)
+            {
+            pvalue+=p[i+j*(blockDim.x *gridDim.x+2)]*sinc(coor_miroir[2*idx]/(2*dx)-i)*sinc(coor_miroir[2*idx+1]/(2*dy)-j);
+            }
+        }
+    p[idx+coor_miroir[idx]*(blockDim.x *gridDim.x+2)]=-pvalue    
     }
 """)
 
