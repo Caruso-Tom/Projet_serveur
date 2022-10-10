@@ -5,7 +5,7 @@ from pycuda.compiler import SourceModule
 
 cuda.init()
 # On choisit le GPU sur lequel le code va tourner, entre 0 et 3
-dev = cuda.Device(3)
+dev = cuda.Device(0)
 contx = dev.make_context()
 
 
@@ -98,11 +98,6 @@ mod = SourceModule("""
         pn1[idx] += dt*dt * excitation;
     }
     }
-    __global__ void Copy(float *p,float *p_cpy)
-    { 
-    int idx = (threadIdx.x+1) +(blockIdx.x*blockDim.x)+ (threadIdx.y + 1 + blockDim.y * blockIdx.y) * (blockDim.x *gridDim.x+2);
-    p_cpy[idx]=p[idx];
-    }
 """)
 
 # Définition des paramétres d'itération en temps
@@ -123,8 +118,8 @@ while nt < Nt:
     # Calcul sur GPU
     iteration_temps(Pn_gpu, Pn1_gpu, Pn1_gpu_cpy, Rho_gpu, V_gpu, i_source, j_source, dt, dx,dz ,t , block=(32, 32, 1),
                     grid=(longueur_grille_x, longueur_grille_z))
-    Copy(Pn1_gpu_cpy, Pn_gpu, block=(32, 32, 1), grid=(longueur_grille_x, longueur_grille_z))
-    Copy(Pn1_gpu, Pn1_gpu_cpy, block=(32, 32, 1), grid=(longueur_grille_x, longueur_grille_z))
+    cuda.memcpy_dtod(Pn_gpu, Pn1_gpu_cpy, Pn1.nbytes)
+    cuda.memcpy_dtod(Pn1_gpu_cpy, Pn1_gpu, Pn1.nbytes)
 
     # Affichage en python
     if nt % 10 == 0:
