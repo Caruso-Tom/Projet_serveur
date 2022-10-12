@@ -1,6 +1,7 @@
-import pycuda.driver as cuda
-from pycuda.compiler import SourceModule
 import numpy as np
+import pycuda.driver as cuda
+import pycuda.gpuarray as garr
+from pycuda.compiler import SourceModule
 cuda.init()
 # On choisit le GPU sur lequel le code va tourner, entre 0 et 3
 dev = cuda.Device(3)
@@ -8,19 +9,22 @@ contx = dev.make_context()
 
 size_x = 64
 size_y = 32
-a = np.ones((size_y, size_x))
-c = np.empty_like(a)
-b = np.ones((size_y, size_x))
 
+c = np.zeros((size_x,size_y))
+"""a = np.ones((size_y, size_x))
+b = np.ones((size_y, size_x))
 a = a.astype(np.float32)
 b = b.astype(np.float32)
 c = c.astype(np.float32)
-
 a_gpu = cuda.mem_alloc(a.nbytes)
 b_gpu = cuda.mem_alloc(b.nbytes)
 c_gpu = cuda.mem_alloc(c.nbytes)
 cuda.memcpy_htod(a_gpu, a)
-cuda.memcpy_htod(b_gpu, b)
+cuda.memcpy_htod(b_gpu, b)"""
+
+a_gpu = garr.ones(size_x*size_y)
+b_gpu = garr.ones(size_x*size_y)
+c_gpu = garr.zeros(size_x*size_y)
 
 mod = SourceModule("""
     __global__ void add(float *a,float *b,float *c)
